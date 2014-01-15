@@ -1307,6 +1307,7 @@ int do_command6(int argc, char *argv[], char **table,
 	struct xtables_rule_match *matchp;
 	struct xtables_target *t;
 	unsigned long long cnt;
+	int result;
 
 	memset(&cs, 0, sizeof(cs));
 	cs.jumpto = "";
@@ -1738,11 +1739,15 @@ int do_command6(int argc, char *argv[], char **table,
 			   chain, XT_EXTENSION_MAXNAMELEN);
 
 	/* Attempt to acquire the xtables lock */
-	if (!restore && !xtables_lock(wait)) {
-		fprintf(stderr, "Another app is currently holding the xtables lock. "
-			"Perhaps you want to use the -w option?\n");
-		xtables_free_opts(1);
-		exit(RESOURCE_PROBLEM);
+	if (!restore) {
+		result = xtables_lock(wait);
+		if (result < 0) {
+			xtables_error(OTHER_PROBLEM, "xtables lock acquisition failed: %s", strerror(errno));
+		}
+		else if (!result) {
+			xtables_error(OTHER_PROBLEM, "Another app is currently holding the xtables lock. "
+				"Perhaps you want to use the -w option?");
+		}
 	}
 
 	/* only allocate handle if we weren't called with a handle */

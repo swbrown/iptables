@@ -10,6 +10,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <xtables.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "xshared.h"
 
 #define XT_SOCKET_NAME "xtables"
@@ -243,29 +247,61 @@ void xs_init_match(struct xtables_match *match)
 		match->init(match->m);
 }
 
-bool xtables_lock(bool wait)
+int xtables_lock(bool wait)
 {
-	int i = 0, ret, xt_socket;
-	struct sockaddr_un xt_addr;
+	int retval;
+	int lock_fd;
+	struct flock lock;
+	int result;
 
-	memset(&xt_addr, 0, sizeof(xt_addr));
-	xt_addr.sun_family = AF_UNIX;
-	strcpy(xt_addr.sun_path+1, XT_SOCKET_NAME);
-	xt_socket = socket(AF_UNIX, SOCK_STREAM, 0);
-	/* If we can't even create a socket, fall back to prior (lockless) behavior */
-	if (xt_socket < 0)
-		return true;
-
-	while (1) {
-		ret = bind(xt_socket, (struct sockaddr*)&xt_addr,
-			   offsetof(struct sockaddr_un, sun_path)+XT_SOCKET_LEN);
-		if (ret == 0)
-			return true;
-		else if (wait == false)
-			return false;
-		if (++i % 2 == 0)
-			fprintf(stderr, "Another app is currently holding the xtables lock; "
-				"waiting for it to exit...\n");
-		sleep(1);
+	if ((lock_fd = open(LOCALSTATEDIR "/run/xtables.lock", O_WRONLY | O_CLOEXEC | O_CREAT, S_IRWXU)) < 0) {
+		retval = -1;
+		goto out_open;
 	}
+
+	memset(&lock, 0, sizeof(lock));
+	lock.l_type = F_WRLCK;
+	lock.l_whence = SEEK_SET;
+	lock.l_start = 0;
+	lock.l_len = 0;
+	if (fcntl(lock_fd, F_SETLK, &lock) == 0) {
+		retval = true;
+		goto out;
+	}
+	else if (!wait) {
+		if (errno == EAGAIN || errno == EACCES) {
+			retval = false;
+		}
+		else {
+			retval = -1;
+		}
+		goto out_lockfail;
+	}
+
+	fprintf(stderr, "Another app is currently holding the xtables lock; "
+		"waiting for it to exit...\n");
+
+	do {
+		memset(&lock, 0, sizeof(lock));
+		lock.l_type = F_WRLCK;
+		lock.l_whence = SEEK_SET;
+		lock.l_start = 0;
+		lock.l_len = 0;
+		result = fcntl(lock_fd, F_SETLKW, &lock);
+	} while (result < 0 && errno == EINTR);
+	if (result < 0) {
+		retval = -1;
+		goto out_lockfail;
+	}
+
+	retval = true;
+
+out:
+	return retval;
+
+out_lockfail:
+	if (close(lock_fd) < 0) abort();
+out_open:
+
+	goto out;
 }
