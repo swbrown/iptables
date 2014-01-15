@@ -278,8 +278,10 @@ int xtables_lock(bool wait)
 		goto out_lockfail;
 	}
 
+#ifdef DEBUG
 	fprintf(stderr, "Another app is currently holding the xtables lock; "
 		"waiting for it to exit...\n");
+#endif
 
 	do {
 		memset(&lock, 0, sizeof(lock));
